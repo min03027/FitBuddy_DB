@@ -7,7 +7,7 @@ from geoalchemy2 import Geometry # PostGIS 공간 데이터 타입
 
 # 상대 import와 절대 import 모두 지원
 try:
-    from .database import Base # database.py에서 정의한 Base를 임포트
+from .database import Base # database.py에서 정의한 Base를 임포트
 except ImportError:
     from database import Base
 
