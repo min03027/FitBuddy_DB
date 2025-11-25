@@ -64,3 +64,4 @@ if __name__ == "__main__":
     show_frames(workout_id=args.workout_id, limit=args.limit)
 
 
+

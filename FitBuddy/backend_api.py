@@ -3,12 +3,17 @@ from typing import Dict
 import base64
 import cv2
 import numpy as np
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
 from pose_detector import PoseDetector
 from angles import extract_angles
+from database import SessionLocal, get_db
+from models import User
+from user_manager import hash_password
 
 app = FastAPI()
 
@@ -20,9 +25,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# 아주 간단한 인메모리 "DB" (서버 껐다 켜면 사라짐)
-fake_users: Dict[str, str] = {}  # email -> password
 
 
 # ==============================
@@ -75,32 +77,80 @@ def read_root():
 # 회원가입 API
 # ==============================
 @app.post("/signup", response_model=SignupResponse)
-def signup(req: SignupRequest):
-    # 이미 존재하는 이메일이면 실패
-    if req.email in fake_users:
+def signup(req: SignupRequest, db: Session = Depends(get_db)):
+    """
+    회원가입 API - PostgreSQL DB에 사용자 정보 저장
+    
+    SessionLocal이란?
+    - SQLAlchemy의 sessionmaker로 만든 클래스
+    - 데이터베이스 세션(연결)을 생성하는 팩토리
+    - Depends(get_db)를 사용하면 각 요청마다 자동으로:
+      1. 새로운 DB 세션 생성
+      2. 요청 처리
+      3. 요청 완료 후 자동으로 세션 닫기
+    """
+    try:
+        # 이미 존재하는 이메일인지 확인
+        existing_user = db.query(User).filter(User.email == req.email).first()
+        if existing_user:
+            return SignupResponse(success=False, message="이미 가입된 이메일입니다.")
+
+        # 비밀번호 해시화
+        password_hash = hash_password(req.password)
+
+        # 새 사용자 생성
+        new_user = User(
+            email=req.email,
+            name=req.name,
+            password_hash=password_hash
+        )
+
+        db.add(new_user)
+        db.commit()
+        db.refresh(new_user)
+
+        print(f"[SIGNUP] {req.email} registered. user_id={new_user.user_id}")
+        return SignupResponse(success=True, message="회원가입이 완료되었습니다.")
+
+    except IntegrityError:
+        db.rollback()
         return SignupResponse(success=False, message="이미 가입된 이메일입니다.")
-
-    # ⚠ 실제 서비스에서는 비밀번호를 반드시 해시해서 저장해야 하지만,
-    # 지금은 데모라 그냥 평문으로 저장
-    fake_users[req.email] = req.password
-    print(f"[SIGNUP] {req.email} registered. total_users={len(fake_users)}")
-
-    return SignupResponse(success=True, message="회원가입이 완료되었습니다.")
+    except Exception as e:
+        db.rollback()
+        print(f"[SIGNUP ERROR] {e}")
+        return SignupResponse(success=False, message=f"회원가입 중 오류가 발생했습니다: {str(e)}")
 
 
 # ==============================
 # 로그인 API
 # ==============================
 @app.post("/login", response_model=LoginResponse)
-def login(req: LoginRequest):
-    if req.email not in fake_users:
-        return LoginResponse(success=False, message="가입되지 않은 이메일입니다.")
+def login(req: LoginRequest, db: Session = Depends(get_db)):
+    """
+    로그인 API - PostgreSQL DB에서 사용자 정보 확인
+    
+    Depends(get_db)를 사용하면:
+    - FastAPI가 자동으로 DB 세션을 생성하고 주입
+    - 함수 실행 후 자동으로 세션 닫기
+    """
+    try:
+        # DB에서 사용자 찾기
+        user = db.query(User).filter(User.email == req.email).first()
 
-    if fake_users[req.email] != req.password:
-        return LoginResponse(success=False, message="비밀번호가 올바르지 않습니다.")
+        if not user:
+            return LoginResponse(success=False, message="가입되지 않은 이메일입니다.")
 
-    print(f"[LOGIN] {req.email} logged in.")
-    return LoginResponse(success=True, message="로그인 성공")
+        # 비밀번호 확인 (해시 비교)
+        password_hash = hash_password(req.password)
+        if user.password_hash != password_hash:
+            return LoginResponse(success=False, message="비밀번호가 올바르지 않습니다.")
+
+        print(f"[LOGIN] {req.email} logged in. user_id={user.user_id}")
+        return LoginResponse(success=True, message="로그인 성공")
+
+    except Exception as e:
+        print(f"[LOGIN ERROR] {e}")
+        return LoginResponse(success=False, message=f"로그인 중 오류가 발생했습니다: {str(e)}")
 
 
 # ==============================

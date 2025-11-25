@@ -19,3 +19,4 @@ echo "=========================================="
 psql -U min -d fitbuddy_db -c "SELECT COUNT(*) as total_frames, COUNT(DISTINCT workout_id) as total_workouts FROM workout_frames;"
 
 
+
